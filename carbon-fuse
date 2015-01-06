@@ -1,0 +1,172 @@
+#!/bin/sh
+
+# offline-fuse : An offline-fuse filesystem cache.
+# Copyright (C) 2015 Fabien Ninoles
+# 
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+set -e
+
+USAGE=<<EOF
+$0 <nickname> <command> [OPTIONS] [...]
+
+Commands:
+init	Initialize a new carbon cache.
+mount	Mount a carbon cache.
+umount	Unmount a carbon cache.
+commit	Commit changes to the underlying source.
+revert	Revert any changes not commit to the source.
+EOF
+
+if [ $# -eq 0 ]
+then
+    echo $USAGE; exit 0;
+fi
+
+name=$1
+command=$2
+shift 2
+
+get_config_name() {
+    echo .carbon.$1.rc
+}
+
+get_config_file() {
+    echo "$HOME/$(get_config_name $1)"
+}
+
+read_config() {
+    local cfg
+    cfg=`get_config_file $1`
+    if [ ! -e $cfg  ]
+    then
+        echo Unknown carbon cache $1.
+        echo $USAGE exit 1;
+    fi
+    . $cfg
+}
+
+mkdir_if_not_exist() {
+    if [ ! -d "$1" ]
+    then
+        mkdir -p "$1"
+    fi
+}
+
+cmd_init() {
+     local a b c d r s t u w
+     usage=<<EOF
+$0 $name init -s <src> -t <target> [OPTIONS]
+
+-s	Source directory.  Must exist.
+-t	Target directory.  Will be created if doesn't exist.
+-r	Read-cache size (in bytes).  Default is 0 (all space available).
+-w  max-write inodes.  Default to 'ulimit -n' (Currently at $(ulimit -n)).
+-d  Data directory.  Where the cache data will be saved. Default to $HOME/.carbon/name/data.
+EOF
+     r=0
+     w=`ulimit -n`
+     c="$(get_config_file $name)"
+     b="$HOME/.carbon/$name"
+     d="$b/data"
+     while getopts s:t:d:r:w: a
+     do
+	     case $a in
+             s) s="$OPTARG" ;;
+             t) t="$OPTARG" ;;
+             d) d="$OPTARG" ;;
+             r) r=$OPTARG ;;
+             w) w=$OPTARG ;;
+             \?) echo $u; exit 1;;
+	     esac
+     done
+     shift `expr $OPTIND - 1`
+     if [ -e "$c" ]
+     then
+         echo This cache already exist
+         echo $u
+         exit 1
+     fi
+     if [ ! -d "$s" ]
+     then
+         echo Invalid source \'$s\'
+         echo $u
+         exit 1
+     fi
+     mkdir_if_not_exist "$t"
+     mkdir_if_not_exist "$b/read"
+     mkdir_if_not_exist "$d/read"
+     mkdir_if_not_exist "$d/write"
+     cat <<EOF > "$c"
+premount () { 
+	return 0 
+}
+postmount () { 
+	return 0
+}
+preumount () { 
+	return 0 
+}
+postumount () { 
+	return 0
+}
+src="$s"
+target="$t"
+read_dir="$b/read"
+rdata_dir="$d/read"
+wdata_dir="$d/write"
+read_options="-ocache=\$rdata_dir,backing_fs=\$src,cache_size=$r,rw"
+write_options="-ocow,max_files=$w,use_ino"
+
+EOF
+ }
+
+cmd_mount() {
+    read_config $name
+    premount "$name" "$src" "$target"
+    backfs "$read_options" "$read_dir"
+    unionfs-fuse "$write_options" "$wdata_dir=RW:$read_dir" "$target"
+    postmount "$name" "$src" "$target"
+}
+
+cmd_umount() {
+    read_config $name
+    preumount "$name" "$src" "$target"
+    fusermount -u "$target" || true
+    fusermount -u "$read_dir" || true
+    postumount "$name" "$src" "$target"
+}
+
+cmd_commit() {
+    return 0
+}
+ 
+cmd_revert() {
+    return 0
+}
+
+ 
+case $command in
+    init | mount | umount | revert | commit)
+        cmd_$command "$@"
+        exit 0
+        ;;
+    *) echo "Unknown command $command"
+       echo $USAGE
+       exit 1
+       ;;
+esac
+
+name=$1
+
