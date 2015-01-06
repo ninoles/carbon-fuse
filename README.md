@@ -16,7 +16,7 @@ offline-fuse used two fuse layers over a source filesystem.  The first
 layer is a read-cache, and we used
 [backfs](https://github.com/wfraser/backfs) for this.  The second
 layer is the write cache, and we used
-[unionfs-fused](https://github.com/rpodgorny/unionfs-fuse) for it.
+[unionfs-fuse](https://github.com/rpodgorny/unionfs-fuse) for it.
 If required, different features would be added to either of them when
 necessary, when the possibility to merging both features into a single
 filesystem later on.
