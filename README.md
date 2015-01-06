@@ -1,22 +1,27 @@
-offline-fuse
+carbon-fuse
 ============
 
 A persistent filesystem cache, using FUSE.
 
-offline-fuse used two fuse filesystems to allow persistent rw to a
-remote filesystem, even if this system is offline, to the limit of the
-cached data.  By itself, it is not a filesystem, but by combining the
-strengths of other projects, it creates a nice work environment if you
-have either a slow, flaky, or costly access to your data, and don't
-have the space to replicate everything locally.
+The goal of carbon-fuse is to carbon-copy every access you made to
+an underlying filesystem, so that you don't need to access it later,
+even when it's offline.  Right now, in the environmental spirit of
+open-source software, carbon-fuse recycle must of its electron by
+using two already existing user-space filesystems which, combined
+together, create a nice work environment if you have either a slow, 
+costly or even flaky access to your data, and don't have the space
+to replicate everything locally.
 
-offline-fuse used two fuse layer over a source filesystem.  The first
+offline-fuse used two fuse layers over a source filesystem.  The first
 layer is a read-cache, and we used
 [backfs](https://github.com/wfraser/backfs) for this.  The second
 layer is the write cache, and we used
 [unionfs-fused](https://github.com/rpodgorny/unionfs-fuse) for it.
+If required, different features would be added to either of them when
+necessary, when the possibility to merging both features into a single
+filesystem later on.
 
-offline-fuse include tools to manage the caching layers, as well as
+carbon-fuse include tools to manage the caching layers, as well as
 managing the different the different layers.  With the exception of
 the fuse filesystems themself, the tools rely currently only in a
 bourne shell scripts, with some basic posix core utilities.  It should
