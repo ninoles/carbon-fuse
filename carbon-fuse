@@ -42,6 +42,8 @@ shift 2
 ## Generic functions
 
 carbon_dryrun=0
+carbon_rsync_copy=0
+carbon_rsync_options="-lptgoDS -v --progress -h"
 
 carbon_setup_dryrun() {
     carbon_dryrun=1
@@ -218,8 +220,11 @@ carbon_commit_modified() {
     if [ -d "$wdata_dir$1" ]
     then
         carbon_doit mkdir -v -p "$commit_target$1"
-    else
+    elif [ $carbon_rsync_copy -eq 0 ]
+    then
         carbon_doit cp -v -d --preserve=all "$wdata_dir$1" "$commit_target$1"
+    else
+        carbon_doit rsync $carbon_rsync_options "$wdata_dir$1" "$commit_target$1"
     fi
 }
 
@@ -278,7 +283,7 @@ carbon_revert_from_path() {
         done
 }
 
-carbon_cmd_init() {
+carbon_init() {
      local a b c d r s t u w
      usage=<<EOF
 $0 $name init -s <src> -t <target> [OPTIONS]
@@ -332,6 +337,7 @@ rdata_dir="$(realpath -s $d/read)"
 wdata_dir="$(realpath -s $d/write)"
 read_options="-ocache=\$rdata_dir,backing_fs=\$src,cache_size=$r,rw"
 write_options="-ocow,max_files=$w,use_ino"
+carbon_rsync_options="$carbon_rsync_options"
 
 # Parameters for the {pre,post}{mount,unmount} commands are name src target
 
@@ -387,15 +393,17 @@ $0 $name commit [OPTIONS] files...
 Options:
 
 -d	Directly commited to target directory, bypassing the read-cache layer.
+-r  Used rsync for copying file.
 -n  Dry-run. Do nothing but print the results
 EOF
     carbon_read_config $name
     commit_target="$read_dir"
-    while getopts nd a
+    while getopts ndr a
     do
         case $a in
             d) commit_target="$src" ;;
             n) carbon_setup_dryrun ;;
+            r) carbon_rsync_copy=1 ;;
             \?)
                 echo Invalid option $a
                 echo $u
