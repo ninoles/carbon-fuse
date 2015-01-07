@@ -66,7 +66,7 @@ carbon_read_config() {
         echo $USAGE exit 1;
     fi
     . $cfg
-    hidden_dir="$(realpath -s -m $wdata_dir/.unionfs)"
+    hidden_dir="$(readlink -m $wdata_dir/.unionfs)"
     hidden_suffix=_HIDDEN~
 }
 
@@ -181,14 +181,19 @@ carbon_find_files_for_revert() {
 carbon_normalize() {
     local p f r
     p="$*"
-	f="/$(realpath -s -m $p --relative-to=$target)"
-	r="/$(realpath -s -m $p --relative-base=$target)"
-    if [ "$f" != "$r" ]
+	f="$(readlink -m "$p")"
+    echo $target 1>&2
+    r="${f#$target}"
+    if [ "$target$r" != "$f" ]
     then
 		echo Invalid path \'$p\' 1>&2
         exit 1        
     fi
-    echo $f
+    if [ -z "$r" ]
+    then
+        r=/
+    fi
+    echo "$r"
 }
 
 carbon_rm_path() {
@@ -325,16 +330,16 @@ EOF
          echo $u
          exit 1
      fi
-     carbon_mkdir -p "$t"
-     carbon_mkdir -p "$b/read"
-     carbon_mkdir -p "$d/read"
-     carbon_mkdir -p "$d/write"
+     mkdir -p "$t"
+     mkdir -p "$b/read"
+     mkdir -p "$d/read"
+     mkdir -p "$d/write"
      cat <<EOF > "$c"
-src="$(realpath -s $s)"
-target="$(realpath -s $t)"
-read_dir="$(realpath -s $b/read)"
-rdata_dir="$(realpath -s $d/read)"
-wdata_dir="$(realpath -s $d/write)"
+src="\$(readlink -f $s)"
+target="\$(readlink -f $t)"
+read_dir="\$(readlink -f $b/read)"
+rdata_dir="\$(readlink -f $d/read)"
+wdata_dir="\$(readlink -f $d/write)"
 read_options="-ocache=\$rdata_dir,backing_fs=\$src,cache_size=$r,rw"
 write_options="-ocow,max_files=$w,use_ino"
 carbon_rsync_options="$carbon_rsync_options"
