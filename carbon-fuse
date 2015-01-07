@@ -22,6 +22,7 @@ USAGE=<<EOF
 $0 <nickname> <command> [OPTIONS] [...]
 
 Commands:
+
 init	Initialize a new carbon cache.
 mount	Mount a carbon cache.
 umount	Unmount a carbon cache.
@@ -38,36 +39,251 @@ name=$1
 command=$2
 shift 2
 
-get_config_name() {
+## Generic functions
+
+carbon_dryrun=0
+
+carbon_setup_dryrun() {
+    carbon_dryrun=1
+}
+
+carbon_config_name() {
     echo .carbon.$1.rc
 }
 
-get_config_file() {
-    echo "$HOME/$(get_config_name $1)"
+carbon_config_file() {
+    echo "$HOME/$(carbon_config_name $1)"
 }
 
-read_config() {
+carbon_read_config() {
     local cfg
-    cfg=`get_config_file $1`
+    cfg=`carbon_config_file $1`
     if [ ! -e $cfg  ]
     then
         echo Unknown carbon cache $1.
         echo $USAGE exit 1;
     fi
     . $cfg
+    hidden_dir="$(realpath -s -m $wdata_dir/.unionfs)"
+    hidden_suffix=_HIDDEN~
 }
 
-mkdir_if_not_exist() {
-    if [ ! -d "$1" ]
+carbon_if_precommit() {
+    if precommit "$1"
     then
-        mkdir -p "$1"
+        shift
+        "$@"
+    elif [ $? -ne 1 ]
+    then
+        exit $?
+    fi  
+}
+
+carbon_if_postcommit() {
+    if postcommit "$1"
+    then
+        shift
+        "$@"
+    elif [ $? -ne 1 ]
+    then
+        exit $?
+    fi    
+}
+
+carbon_doit() {
+    if [ $carbon_dryrun -eq 0 ]
+    then
+        "$@"
+    else
+        echo "$@"
     fi
 }
 
-cmd_init() {
+carbon_normalize_find() {
+    local b m p q s
+    m=$1
+    b=$2
+    s=$3
+    while read p
+    do
+        q="${p%$s}"
+        echo $m "${q#$b}"
+    done
+}
+
+
+# Return the list of affected files given a file target.
+# The list is always the same:
+# - hidden files (leaf first) prefixed with "hid "
+# - hidden dirs (leaf first) prefixed with "hid "
+# - modified dirs (root first) prefixed with "mod "
+# - modified files (root first) prefixed with "mod "
+carbon_find_files_for_commit() {
+	local f t
+	f="$1"
+	if [ -d "$hidden_dir$f" ] ; then
+        find "$hidden_dir$f" -depth -name "*$hidden_suffix" -not -type d | \
+            carbon_normalize_find hid "$hidden_dir" "$hidden_suffix"
+        find "$hidden_dir$f" -depth -name "*$hidden_suffix" -type d | \
+            carbon_normalize_find hid "$hidden_dir" "$hidden_suffix"
+    elif [ -e "$hidden_dir$f$hidden_suffix" ]
+    then
+        echo hid $f
+    fi
+    if [ -e "$wdata_dir$f" ]
+    then
+        echo mod $f
+        if [ -d "$wdata_dir$f" ]
+        then
+            find "$wdata_dir$f" -type d | \
+                carbon_normalize_find mod "$wdata_dir"
+            find "$wdata_dir$f" -not -type d | \
+                carbon_normalize_find mod "$wdata_dir"
+        fi
+    fi
+}
+
+# Like the previous ones but in order good for reverting.
+# - modified files (leaf first) prefixed with "mod "
+# - modified dirs (leaf first) prefixed with "mod "
+# - hidden dirs (root first) prefixed with "hid "
+# - hidden files (root first) prefixed with "hid "
+carbon_find_files_for_revert() {
+	local f t
+	f="$1"
+    if [ -e "$wdata_dir$f" ]
+    then
+        if [ -d "$wdata_dir$f" ]
+        then
+            find "$wdata_dir$f" -depth -not -type d | \
+                carbon_normalize_find mod "$wdata_dir"
+            find "$wdata_dir$f" -depth -type d | \
+                carbon_normalize_find mod "$wdata_dir"
+        fi
+        echo mod $f
+    fi
+	if [ -d "$hidden_dir$f" ] ; then
+        find "$hidden_dir$f" -name "*$hidden_suffix" -type d | \
+            carbon_normalize_find hid "$hidden_dir" "$hidden_suffix"
+        find "$hidden_dir$f" -name "*$hidden_suffix" -not -type d | \
+            carbon_normalize_find hid "$hidden_dir" "$hidden_suffix"
+    elif [ -e "$hidden_dir$f$hidden_suffix" ]
+    then
+        echo hid $f
+    fi
+}
+
+# return files relative to the target directory, with a / preceding it
+# (and no / at the end of directories).
+# Exit with an error if the path is invalid.
+carbon_normalize() {
+    local p f r
+    p="$*"
+	f="/$(realpath -s -m $p --relative-to=$target)"
+	r="/$(realpath -s -m $p --relative-base=$target)"
+    if [ "$f" != "$r" ]
+    then
+		echo Invalid path \'$p\' 1>&2
+        exit 1        
+    fi
+    echo $f
+}
+
+carbon_rm_path() {
+	local b f
+	b=$1
+	f="${2#$b/}"
+	carbon_doit \( cd "$b" \&\& rm -d "$f" \)
+}
+
+carbon_rmdir_path() {
+	local b d
+	b=$1
+	d="${2#$b/}"
+	carbon_doit \( cd "$b" \&\& rmdir -p "$d/" \)
+}
+
+## Commit implementation
+
+carbon_commit_hidden() {
+    if [ -d "$hidden_dir$1$hidden_suffix" ]
+    then
+        carbon_doit rmdir -v "$commit_target$1"
+    else
+        carbon_doit rm -v "$commit_target$1"
+    fi
+}
+
+carbon_commit_modified() {
+    if [ -d "$wdata_dir$1" ]
+    then
+        carbon_doit mkdir -v -p "$commit_target$1"
+    else
+        carbon_doit cp -v -d --preserve=all "$wdata_dir$1" "$commit_target$1"
+    fi
+}
+
+carbon_commit_path() {
+    case $1 in
+        hid) carbon_commit_hidden "$2" ;;
+        mod) carbon_commit_modified "$2" ;;
+        *) echo Error: Invalid mod $1 for file $2
+    esac
+}
+
+carbon_revert_path() {
+    local b p    
+    case $1 in
+        hid) b="$hidden_dir"
+             p="$2$hidden_suffix"
+             ;;
+        mod) b="$wdata_dir"
+             p="$2"
+             ;;
+        *) echo Error: Invalid mod $1 for file $2
+    esac
+    if [ -d "$b$p" ]
+    then
+        carbon_rmdir_path "$b" "$b$p"
+    else
+        carbon_rm_path "$b" "$b$p"
+    fi
+}
+
+
+#generic implit
+carbon_commit_from_path() {
+    local m p r
+    r=$(carbon_normalize $1)
+    # TODO: Merge them to save current space.
+    carbon_find_files_for_commit "$r" | \
+        while read m p
+        do
+            carbon_if_precommit "$p" carbon_commit_path $m "$p"
+        done
+    carbon_find_files_for_revert "$r" | \
+        while read m p
+        do
+            carbon_if_postcommit "$p" carbon_revert_path $m "$p"
+        done
+}
+
+carbon_revert_from_path() {
+    local m p r
+    r=$(carbon_normalize $1)
+    carbon_find_files_for_revert "$r" | \
+        while read m p
+        do
+            carbon_if_postcommit "$p" carbon_revert_path $m "$p"
+        done
+}
+
+carbon_cmd_init() {
      local a b c d r s t u w
      usage=<<EOF
 $0 $name init -s <src> -t <target> [OPTIONS]
+
+Options:
 
 -s	Source directory.  Must exist.
 -t	Target directory.  Will be created if doesn't exist.
@@ -77,7 +293,7 @@ $0 $name init -s <src> -t <target> [OPTIONS]
 EOF
      r=0
      w=`ulimit -n`
-     c="$(get_config_file $name)"
+     c="$(carbon_config_file $name)"
      b="$HOME/.carbon/$name"
      d="$b/data"
      while getopts s:t:d:r:w: a
@@ -104,11 +320,21 @@ EOF
          echo $u
          exit 1
      fi
-     mkdir_if_not_exist "$t"
-     mkdir_if_not_exist "$b/read"
-     mkdir_if_not_exist "$d/read"
-     mkdir_if_not_exist "$d/write"
+     carbon_mkdir -p "$t"
+     carbon_mkdir -p "$b/read"
+     carbon_mkdir -p "$d/read"
+     carbon_mkdir -p "$d/write"
      cat <<EOF > "$c"
+src="$(realpath -s $s)"
+target="$(realpath -s $t)"
+read_dir="$(realpath -s $b/read)"
+rdata_dir="$(realpath -s $d/read)"
+wdata_dir="$(realpath -s $d/write)"
+read_options="-ocache=\$rdata_dir,backing_fs=\$src,cache_size=$r,rw"
+write_options="-ocow,max_files=$w,use_ino"
+
+# Parameters for the {pre,post}{mount,unmount} commands are name src target
+
 premount () { 
 	return 0 
 }
@@ -121,45 +347,105 @@ preumount () {
 postumount () { 
 	return 0
 }
-src="$s"
-target="$t"
-read_dir="$b/read"
-rdata_dir="$d/read"
-wdata_dir="$d/write"
-read_options="-ocache=\$rdata_dir,backing_fs=\$src,cache_size=$r,rw"
-write_options="-ocow,max_files=$w,use_ino"
 
+# Parameters for the {pre,post}commit commands are name path (for each path).
+
+# Returning 1 on a precommit will not copy the file (but will still revert the cached copy)
+precommit() {
+    return 0
+}
+
+# Returning 1 on a postcommit will not revert the cached version.
+# Note that postcommit is also called on the revert operations.
+postcommit() {
+    return 0
+}
 EOF
- }
+}
 
-cmd_mount() {
-    read_config $name
+carbon_mount() {
+    carbon_read_config $name
     premount "$name" "$src" "$target"
-    backfs "$read_options" "$read_dir"
-    unionfs-fuse "$write_options" "$wdata_dir=RW:$read_dir" "$target"
+    backfs $read_options "$read_dir"
+    unionfs-fuse $write_options "$wdata_dir=RW:$read_dir" "$target"
     postmount "$name" "$src" "$target"
 }
 
-cmd_umount() {
-    read_config $name
+carbon_umount() {
+    carbon_read_config $name
     preumount "$name" "$src" "$target"
     fusermount -u "$target" || true
     fusermount -u "$read_dir" || true
     postumount "$name" "$src" "$target"
 }
 
-cmd_commit() {
-    return 0
+carbon_commit() {
+    local a u
+    u=<<EOF
+$0 $name commit [OPTIONS] files...
+
+Options:
+
+-d	Directly commited to target directory, bypassing the read-cache layer.
+-n  Dry-run. Do nothing but print the results
+EOF
+    carbon_read_config $name
+    commit_target="$read_dir"
+    while getopts nd a
+    do
+        case $a in
+            d) commit_target="$src" ;;
+            n) carbon_setup_dryrun ;;
+            \?)
+                echo Invalid option $a
+                echo $u
+                exit 1
+                ;;
+        esac
+    done
+    shift `expr $OPTIND - 1`
+
+    while [ $# -ne 0 ]; do
+        carbon_commit_from_path "$1"
+        shift
+    done
 }
  
-cmd_revert() {
-    return 0
+carbon_revert() {
+    local a u
+    u=<<EOF
+$0 $name revert [OPTIONS] files...
+
+Options:
+
+-d	Directly commited to target directory, bypassing the read-cache layer.
+EOF
+    
+    carbon_read_config $name
+
+    while getopts n a
+    do
+        case $a in
+            n) carbon_setup_dryrun ;;
+            \?)
+                echo Invalid option $a
+                echo $u
+                exit 1
+                ;;
+        esac
+    done
+    shift `expr $OPTIND - 1`
+
+    while [ $# -ne 0 ]; do
+        carbon_revert_from_path "$1"
+        shift
+    done
 }
 
  
 case $command in
     init | mount | umount | revert | commit)
-        cmd_$command "$@"
+        carbon_$command "$@"
         exit 0
         ;;
     *) echo "Unknown command $command"
