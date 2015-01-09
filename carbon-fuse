@@ -200,14 +200,14 @@ carbon_rm_path() {
 	local b f
 	b=$1
 	f="${2#$b/}"
-	carbon_doit \( cd "$b" \&\& rm -d "$f" \)
+	( cd "$b" && carbon_doit rm -d "$f" )
 }
 
 carbon_rmdir_path() {
 	local b d
 	b=$1
 	d="${2#$b/}"
-	carbon_doit \( cd "$b" \&\& rmdir -p "$d/" \)
+	( cd "$b" && carbon_doit rmdir -p "$d/" )
 }
 
 ## Commit implementation
