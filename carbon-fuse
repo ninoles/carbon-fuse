@@ -102,76 +102,54 @@ carbon_doit() {
 }
 
 carbon_normalize_find() {
-    local b m p q s
-    m=$1
-    b=$2
-    s=$3
+    local b p q s
+    b=$1
+    s=$2
     while read p
     do
         q="${p%$s}"
-        echo $m "${q#$b}"
+        echo "${q#$b}"
     done
 }
 
-
-# Return the list of affected files given a file target.
-# The list is always the same:
-# - hidden files (leaf first) prefixed with "hid "
-# - hidden dirs (leaf first) prefixed with "hid "
-# - modified dirs (root first) prefixed with "mod "
-# - modified files (root first) prefixed with "mod "
-carbon_find_files_for_commit() {
-	local f t
+carbon_find_files() {
+    local f b s e
 	f="$1"
-	if [ -d "$hidden_dir$f" ] ; then
-        find "$hidden_dir$f" -depth -name "*$hidden_suffix" -not -type d | \
-            carbon_normalize_find hid "$hidden_dir" "$hidden_suffix"
-        find "$hidden_dir$f" -depth -name "*$hidden_suffix" -type d | \
-            carbon_normalize_find hid "$hidden_dir" "$hidden_suffix"
-    elif [ -e "$hidden_dir$f$hidden_suffix" ]
+    b="$2"
+    s="$3"
+    e="$b$f$s"
+    if [ -e "$e" -a ! -d "$e" ]
     then
-        echo hid $f
-    fi
-    if [ -e "$wdata_dir$f" ]
+        echo "$f"
+    elif [ -d "$b$f" ]
     then
-        echo mod $f
-        if [ -d "$wdata_dir$f" ]
-        then
-            find "$wdata_dir$f" -type d | \
-                carbon_normalize_find mod "$wdata_dir"
-            find "$wdata_dir$f" -not -type d | \
-                carbon_normalize_find mod "$wdata_dir"
-        fi
+        find "$b$f" -name "*$s" -not -type d | \
+            carbon_normalize_find "$b" "$s"
     fi
 }
-
-# Like the previous ones but in order good for reverting.
-# - modified files (leaf first) prefixed with "mod "
-# - modified dirs (leaf first) prefixed with "mod "
-# - hidden dirs (root first) prefixed with "hid "
-# - hidden files (root first) prefixed with "hid "
-carbon_find_files_for_revert() {
-	local f t
-	f="$1"
-    if [ -e "$wdata_dir$f" ]
+carbon_find_dirs() {
+	local f b s e d
+    d="$1"
+	f="$2"
+    b="$3"
+    s="$4"
+    e="$b$f$s"
+    if [ "$d" = "--" ]
     then
-        if [ -d "$wdata_dir$f" ]
-        then
-            find "$wdata_dir$f" -depth -not -type d | \
-                carbon_normalize_find mod "$wdata_dir"
-            find "$wdata_dir$f" -depth -type d | \
-                carbon_normalize_find mod "$wdata_dir"
-        fi
-        echo mod $f
+        d=""
     fi
-	if [ -d "$hidden_dir$f" ] ; then
-        find "$hidden_dir$f" -name "*$hidden_suffix" -type d | \
-            carbon_normalize_find hid "$hidden_dir" "$hidden_suffix"
-        find "$hidden_dir$f" -name "*$hidden_suffix" -not -type d | \
-            carbon_normalize_find hid "$hidden_dir" "$hidden_suffix"
-    elif [ -e "$hidden_dir$f$hidden_suffix" ]
+    if [ "$d" -a "$s" -a -d "$e" ]
     then
-        echo hid $f
+        echo "$f"
+    fi
+	if [ -d "$b$f" ]
+    then
+        find "$b$f" $d -name "*$s" -type d | \
+            carbon_normalize_find "$b" "$s"
+    fi
+    if [ "$d" -a "$s" -a -d "$e" ]
+    then
+        echo "$f"
     fi
 }
 
@@ -182,7 +160,6 @@ carbon_normalize() {
     local p f r
     p="$*"
 	f="$(readlink -m "$p")"
-    echo $target 1>&2
     r="${f#$target}"
     if [ "$target$r" != "$f" ]
     then
@@ -196,96 +173,80 @@ carbon_normalize() {
     echo "$r"
 }
 
-carbon_rm_path() {
-	local b f
-	b=$1
-	f="${2#$b/}"
-	( cd "$b" && carbon_doit rm -d "$f" )
-}
-
-carbon_rmdir_path() {
-	local b d
-	b=$1
-	d="${2#$b/}"
-	( cd "$b" && carbon_doit rmdir -p "$d/" )
+carbon_doit_xargs () {
+    echo Running xargs "$@" from $(pwd)
+    if [ $carbon_dryrun -ne 0 ] ;
+    then
+        xargs -0 --verbose -r echo "$@"
+    else
+        xargs -0 --verbose -r "$@"
+    fi
 }
 
 ## Commit implementation
 
-carbon_commit_hidden() {
-    if [ -d "$hidden_dir$1$hidden_suffix" ]
-    then
-        carbon_doit rmdir -v "$commit_target$1"
-    else
-        carbon_doit rm -v "$commit_target$1"
-    fi
-}
-
-carbon_commit_modified() {
-    if [ -d "$wdata_dir$1" ]
-    then
-        carbon_doit mkdir -v -p "$commit_target$1"
-    elif [ $carbon_rsync_copy -eq 0 ]
-    then
-        carbon_doit cp -v -d --preserve=all "$wdata_dir$1" "$commit_target$1"
-    else
-        carbon_doit rsync $carbon_rsync_options "$wdata_dir$1" "$commit_target$1"
-    fi
-}
-
-carbon_commit_path() {
-    case $1 in
-        hid) carbon_commit_hidden "$2" ;;
-        mod) carbon_commit_modified "$2" ;;
-        *) echo Error: Invalid mod $1 for file $2
-    esac
-}
-
-carbon_revert_path() {
-    local b p    
-    case $1 in
-        hid) b="$hidden_dir"
-             p="$2$hidden_suffix"
-             ;;
-        mod) b="$wdata_dir"
-             p="$2"
-             ;;
-        *) echo Error: Invalid mod $1 for file $2
-    esac
-    if [ -d "$b$p" ]
-    then
-        carbon_rmdir_path "$b" "$b$p"
-    else
-        carbon_rm_path "$b" "$b$p"
-    fi
-}
-
-
-#generic implit
 carbon_commit_from_path() {
-    local m p r
-    r=$(carbon_normalize $1)
+    local p r n
+    r=$( carbon_normalize $1 )
     # TODO: Merge them to save current space.
-    carbon_find_files_for_commit "$r" | \
-        while read m p
+    carbon_find_files "$r" "$hidden_dir" "$hidden_suffix" | \
+        while read p
         do
-            carbon_if_precommit "$p" carbon_commit_path $m "$p"
-        done
-    carbon_find_files_for_revert "$r" | \
-        while read m p
+            carbon_if_precommit "$p" printf ".%s\0" "$p"
+        done | ( cd "$commit_target" && carbon_doit_xargs rm -v )
+    carbon_find_dirs -depth "$r" "$hidden_dir" "$hidden_suffix" | \
+        while read p
         do
-            carbon_if_postcommit "$p" carbon_revert_path $m "$p"
-        done
+            carbon_if_precommit "$p" printf ".%s\0" "$p"
+        done | ( cd "$commit_target" && carbon_doit_xargs rmdir )
+    carbon_find_dirs -- "$r" "$wdata_dir" | \
+        while read p
+        do
+            carbon_if_precommit "$p" printf ".%s\0" "$p"
+        done | ( cd "$commit_target" && carbon_doit_xargs mkdir -v -p )
+    carbon_find_files "$r" "$wdata_dir" | \
+        while read p
+        do
+            carbon_if_precommit "$p" printf ".%s\0" "$p"
+        done | if [ $carbon_rsync_copy -eq 0 ]
+               then
+                   ( cd "$wdata_dir" && carbon_doit_xargs cp -t "$commit_target" )
+               else
+                   if [ $carbon_dryrun -ne 0 ]
+                   then
+                       n="-n"
+                   else
+                       n=""
+                   fi
+                   echo rsync $n $carbon_rsync_options -0 --files-from=- "$wdata_dir" "$commit_target"
+                   rsync $n $carbon_rsync_options -0 --files-from=- "$wdata_dir" "$commit_target"
+               fi
+    carbon_revert_from_path $1
 }
 
 carbon_revert_from_path() {
-    local m p r
-    r=$(carbon_normalize $1)
-    carbon_find_files_for_revert "$r" | \
-        while read m p
+    local p r
+    r=$( carbon_normalize $1 )
+    carbon_find_files "$r" "$wdata_dir" | \
+        while read p
         do
-            carbon_if_postcommit "$p" carbon_revert_path $m "$p"
-        done
+            carbon_if_postcommit "$p" printf ".%s\0" "$p"
+        done | ( cd "$wdata_dir" && carbon_doit_xargs rm -d -v )
+    carbon_find_dirs -- "$r" "$wdata_dir" | \
+        while read p
+        do
+            carbon_if_postcommit "$p" printf ".%s\0" "$p"
+        done | ( cd "$wdata_dir" && carbon_doit_xargs rmdir -p )
+    carbon_find_dirs -- "$r" "$hidden_files" "$hidden_suffix" | \
+        while read p
+        do
+            carbon_if_postcommit "$p" printf ".%s%s\0" "$p" "$hidden_suffix"
+        done | ( cd "$hidden_dir" && carbon_doit_xargs rmdir -p )
+    carbon_find_files "$r" "$hidden_files" "$hidden_suffix" | \
+        while read p
+        do
+            carbon_if_postcommit "$p" printf ".%s%s\0" "$p" "$hidden_suffix"
+        done | ( cd "$hidden_dir" && carbon_doit_xargs rm -v -d )
 }
 
 carbon_init() {
@@ -362,14 +323,14 @@ postumount () {
 # Parameters for the {pre,post}commit commands are name path (for each path).
 
 # Returning 1 on a precommit will not copy the file (but will still revert the cached copy)
-precommit() {
+precommit () {
     return 0
 }
 
 # Returning 1 on a postcommit will not revert the cached version.
-# Note that postcommit is also called on the revert operations.
-postcommit() {
-    return 0
+# Note that pcommit is also called on the revert operations.
+postcommit () {
+    return $1
 }
 EOF
 }
