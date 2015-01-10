@@ -18,7 +18,8 @@
 
 set -e
 
-USAGE=<<EOF
+carbon_usage () {
+    cat <<EOF
 $0 <nickname> <command> [OPTIONS] [...]
 
 Commands:
@@ -29,10 +30,12 @@ umount	Unmount a carbon cache.
 commit	Commit changes to the underlying source.
 revert	Revert any changes not commit to the source.
 EOF
+}
 
 if [ $# -eq 0 ]
 then
-    echo $USAGE; exit 0;
+    carbon_usage
+    exit 0;
 fi
 
 name=$1
@@ -249,9 +252,8 @@ carbon_revert_from_path() {
         done | ( cd "$hidden_dir" && carbon_doit_xargs rm -v -d )
 }
 
-carbon_init() {
-     local a b c d r s t u w
-     usage=<<EOF
+carbon_init_usage() {
+    cat <<EOF
 $0 $name init -s <src> -t <target> [OPTIONS]
 
 Options:
@@ -262,6 +264,9 @@ Options:
 -w  max-write inodes.  Default to 'ulimit -n' (Currently at $(ulimit -n)).
 -d  Data directory.  Where the cache data will be saved. Default to $HOME/.carbon/name/data.
 EOF
+}
+carbon_init() {
+     local a b c d r s t w
      r=0
      w=`ulimit -n`
      c="$(carbon_config_file $name)"
@@ -275,24 +280,27 @@ EOF
              d) d="$OPTARG" ;;
              r) r=$OPTARG ;;
              w) w=$OPTARG ;;
-             \?) echo $u; exit 1;;
+             \?) echo Invalid option
+                 carbon_init_usage
+                 exit 1 ;;
 	     esac
      done
      shift `expr $OPTIND - 1`
      if [ -e "$c" ]
      then
          echo This cache already exist
-         echo $u
+         carbon_init_usage
          exit 1
      fi
      if [ ! -d "$s" ]
      then
          echo Invalid source \'$s\'
-         echo $u
+         carbon_init_usage
          exit 1
      fi
      mkdir -p "$t"
      mkdir -p "$b/read"
+     mkdir -p "$b/logs"
      mkdir -p "$d/read"
      mkdir -p "$d/write"
      cat <<EOF > "$c"
@@ -301,6 +309,7 @@ target="\$(readlink -f $t)"
 read_dir="\$(readlink -f $b/read)"
 rdata_dir="\$(readlink -f $d/read)"
 wdata_dir="\$(readlink -f $d/write)"
+log_dir=\$(readlink -f $b/logs)"
 read_options="-ocache=\$rdata_dir,backing_fs=\$src,cache_size=$r,rw"
 write_options="-ocow,max_files=$w,use_ino"
 carbon_rsync_options="$carbon_rsync_options"
@@ -336,10 +345,45 @@ EOF
 }
 
 carbon_mount() {
+    local a f l o
     carbon_read_config $name
+    o=""
+    f=0
+    while getopts fd a
+    do
+        case $a in
+            f) o="$o -f" ; f=1 ;;
+            d) o="$o -d" ; f=1 ;;
+            \?) echo Invalid option.
+                cat <<EOF
+$0 $name mount [OPTIONS]
+
+Options:
+-f	Foreground operation
+-d	Debug options.  Implied -f
+EOF
+                exit 1
+        esac
+    done
+    
     premount "$name" "$src" "$target"
-    backfs $read_options "$read_dir"
-    unionfs-fuse $write_options "$wdata_dir=RW:$read_dir" "$target"
+
+    l="$log_dir/read.log"
+    savelog "$l"
+    exec backfs $o $read_options "$read_dir" >>"$l" 2>&1 &
+    if [ $f -eq 1 ]
+    then
+        echo $! > "$log_dir/read.pid"
+    fi
+
+    l="$log_dir/write.log"
+    savelog "$l"
+    exec unionfs-fuse -f $write_options "$wdata_dir=RW:$read_dir" "$target" >>"$l" 2>&1 &
+    if [ $f -eq 1 ]
+    then
+        echo $! > "$log_dir/write.pid"
+    fi
+    
     postmount "$name" "$src" "$target"
 }
 
@@ -352,16 +396,7 @@ carbon_umount() {
 }
 
 carbon_commit() {
-    local a u
-    u=<<EOF
-$0 $name commit [OPTIONS] files...
-
-Options:
-
--d	Directly commited to target directory, bypassing the read-cache layer.
--r  Used rsync for copying file.
--n  Dry-run. Do nothing but print the results
-EOF
+    local a
     carbon_read_config $name
     commit_target="$read_dir"
     while getopts ndr a
@@ -371,8 +406,16 @@ EOF
             n) carbon_setup_dryrun ;;
             r) carbon_rsync_copy=1 ;;
             \?)
-                echo Invalid option $a
-                echo $u
+                echo Invalid option
+                cat <<EOF
+$0 $name commit [OPTIONS] files...
+
+Options:
+
+-d	Directly commited to target directory, bypassing the read-cache layer.
+-r  Used rsync for copying file.
+-n  Dry-run. Do nothing but print the results
+EOF
                 exit 1
                 ;;
         esac
@@ -386,14 +429,7 @@ EOF
 }
  
 carbon_revert() {
-    local a u
-    u=<<EOF
-$0 $name revert [OPTIONS] files...
-
-Options:
-
--d	Directly commited to target directory, bypassing the read-cache layer.
-EOF
+    local a
     
     carbon_read_config $name
 
@@ -402,8 +438,14 @@ EOF
         case $a in
             n) carbon_setup_dryrun ;;
             \?)
-                echo Invalid option $a
-                echo $u
+                echo Invalid option
+                cat <<EOF
+$0 $name revert [OPTIONS] files...
+
+Options:
+
+-d	Directly commited to target directory, bypassing the read-cache layer.
+EOF
                 exit 1
                 ;;
         esac
@@ -416,14 +458,14 @@ EOF
     done
 }
 
- 
+
 case $command in
     init | mount | umount | revert | commit)
         carbon_$command "$@"
         exit 0
         ;;
     *) echo "Unknown command $command"
-       echo $USAGE
+       carbon_usage
        exit 1
        ;;
 esac
