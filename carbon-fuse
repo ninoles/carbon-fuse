@@ -213,7 +213,7 @@ carbon_commit_from_path() {
             carbon_if_precommit "$p" printf ".%s\0" "$p"
         done | if [ $carbon_rsync_copy -eq 0 ]
                then
-                   ( cd "$wdata_dir" && carbon_doit_xargs cp -t "$commit_target" )
+                   ( cd "$wdata_dir" && carbon_doit_xargs cp -v -d --preserve=all -t "$commit_target" )
                else
                    if [ $carbon_dryrun -ne 0 ]
                    then
@@ -234,7 +234,7 @@ carbon_revert_from_path() {
         while read p
         do
             carbon_if_postcommit "$p" printf ".%s\0" "$p"
-        done | ( cd "$wdata_dir" && carbon_doit_xargs rm -d -v )
+        done | ( cd "$wdata_dir" && carbon_doit_xargs rm -v )
     carbon_find_dirs -- "$r" "$wdata_dir" | \
         while read p
         do
@@ -249,7 +249,7 @@ carbon_revert_from_path() {
         while read p
         do
             carbon_if_postcommit "$p" printf ".%s%s\0" "$p" "$hidden_suffix"
-        done | ( cd "$hidden_dir" && carbon_doit_xargs rm -v -d )
+        done | ( cd "$hidden_dir" && carbon_doit_xargs rm -v )
 }
 
 carbon_init_usage() {
