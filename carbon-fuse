@@ -239,12 +239,12 @@ carbon_revert_from_path() {
         while read p
         do
             carbon_if_postcommit "$p" printf "%s\0" "${p#/}"
-        done | ( cd "$wdata_dir" && carbon_doit_xargs rmdir -p )
+        done | ( cd "$wdata_dir" && carbon_doit_xargs rmdir --ignore-fail-on-non-empty -p )
     carbon_find_dirs -- "$r" "$hidden_files" "$hidden_suffix" | \
         while read p
         do
             carbon_if_postcommit "$p" printf "%s%s\0" "${p#/}" "$hidden_suffix"
-        done | ( cd "$hidden_dir" && carbon_doit_xargs rmdir -p )
+        done | ( cd "$hidden_dir" && carbon_doit_xargs rmdir --ignore-fail-on-non-empty -p )
     carbon_find_files "$r" "$hidden_files" "$hidden_suffix" | \
         while read p
         do
