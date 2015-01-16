@@ -196,7 +196,7 @@ carbon_commit_from_path() {
         while read p
         do
             carbon_if_precommit "$p" printf ".%s\0" "$p"
-        done | ( cd "$commit_target" && carbon_doit_xargs rm -v )
+        done | ( cd "$commit_target" && carbon_doit_xargs rm -v -f ) # -f since the file can be already removed.
     carbon_find_dirs -depth "$r" "$hidden_dir" "$hidden_suffix" | \
         while read p
         do
