@@ -126,12 +126,16 @@ carbon_find_files() {
         echo "$f"
     elif [ -d "$b$f" ]
     then
-        find "$b$f" -name "*$s" -not -type d | \
-            carbon_normalize_find "$b" "$s"
+        ( if [ "$b$f" = "$wdata_dir/" ]
+        then
+            find "$b$f" -path "$hidden_dir" -prune -o -name "*$s" -not -type d -print
+        else
+            find "$b$f" -name "*$s" -not -type d
+        fi ) | carbon_normalize_find "$b" "$s"
     fi
 }
 carbon_find_dirs() {
-	local f b s e d
+	local f b s e d -
     d="$1"
 	f="$2"
     b="$3"
@@ -141,16 +145,25 @@ carbon_find_dirs() {
     then
         d=""
     fi
-    if [ "$d" -a "$s" -a -d "$e" ]
+    if [ "$d" -a "$s" -a -d "$e" -a "$f" != "/" ]
     then
         echo "$f"
     fi
 	if [ -d "$b$f" ]
     then
-        find "$b$f" $d -name "*$s" -type d | \
-            carbon_normalize_find "$b" "$s"
+        ( if [ "$b$f" = "$wdata_dir/" ]
+          then
+              if [ "$d" ]
+              then
+                  find "$b$f" "$d" -name "*$s" -type d -not path "$b$f" -not -path "$hidden_dir*"
+              else
+                  find "$b$f" -path "$hidden_dir" -prune -o -name "*$s" -type d -not -path "$b$f" -print
+              fi
+          else
+              find "$b$f" $d -name "*$s" -type d -not -path "$b$f"
+          fi ) | carbon_normalize_find "$b" "$s"
     fi
-    if [ "$d" -a "$s" -a -d "$e" ]
+    if [ -z "$d" -a "$s" -a -d "$e" -a "$f" != "/" ]
     then
         echo "$f"
     fi
@@ -250,6 +263,33 @@ carbon_revert_from_path() {
         do
             carbon_if_postcommit "$p" printf ".%s%s\0" "$p" "$hidden_suffix"
         done | ( cd "$hidden_dir" && carbon_doit_xargs rm -v )
+}
+
+carbon_list_from_path() {
+    local p r n t
+    t="$1"
+    r=$( carbon_normalize $2 )
+    # TODO: Merge them to save current space.
+    carbon_find_files "$r" "$hidden_dir" "$hidden_suffix" | \
+        while read p
+        do
+            carbon_if_precommit "$p" echo "--- $t$p"
+        done
+    carbon_find_dirs -depth "$r" "$hidden_dir" "$hidden_suffix" | \
+        while read p
+        do
+            carbon_if_precommit "$p" echo "--- $t$p/"
+        done
+    carbon_find_dirs -- "$r" "$wdata_dir" | \
+        while read p
+        do
+            carbon_if_precommit "$p" echo "+++ $t$p/"
+        done
+    carbon_find_files "$r" "$wdata_dir" | \
+        while read p
+        do
+            carbon_if_precommit "$p" echo "+++ $t$p"
+        done
 }
 
 carbon_init_usage() {
@@ -427,7 +467,7 @@ EOF
         shift
     done
 }
- 
+
 carbon_revert() {
     local a
     
@@ -458,9 +498,47 @@ EOF
     done
 }
 
+carbon_list() {
+    local a p
+    carbon_read_config $name
+    p="."
+
+    while getopts p:st a
+    do
+        case $a in
+            p) p="$OPTARG" ;;
+            s) p="$src"    ;;
+            t) p="$target" ;;
+            \?)
+                echo Invalid option
+                cat <<EOF
+$0 $name list [OPTIONS] files...
+
+List all files that need to be commited.  Remove files are prefixed
+with '--- ', while added or modified files are prefixed with '+++ '.
+The files always start with a '.' by default (followed by a slash),
+but you can change it.
+
+Options:
+
+-s  Prefix with the src directory.
+-t  Prefix with the target directory.
+-p	prefix the file path with the following string.
+EOF
+                exit 1
+                ;;
+        esac
+    done
+    shift `expr $OPTIND - 1`
+
+    while [ $# -ne 0 ]; do
+        carbon_list_from_path "$p" "$1"
+        shift
+    done | sort -k2 -u | sort -k1,1 --stable
+}
 
 case $command in
-    init | mount | umount | revert | commit)
+    init | mount | umount | revert | commit | list)
         carbon_$command "$@"
         exit 0
         ;;
