@@ -29,6 +29,7 @@ mount	Mount a carbon cache.
 umount	Unmount a carbon cache.
 commit	Commit changes to the underlying source.
 revert	Revert any changes not commit to the source.
+list    List all file changes.
 EOF
 }
 
@@ -126,12 +127,12 @@ carbon_find_files() {
         echo "$f"
     elif [ -d "$b$f" ]
     then
-        ( if [ "$b$f" = "$wdata_dir/" ]
+        if [ "$b$f" = "$wdata_dir/" ]
         then
             find "$b$f" -path "$hidden_dir" -prune -o -name "*$s" -not -type d -print
         else
             find "$b$f" -name "*$s" -not -type d
-        fi ) | carbon_normalize_find "$b" "$s"
+        fi | carbon_normalize_find "$b" "$s"
     fi
 }
 carbon_find_dirs() {
@@ -151,17 +152,17 @@ carbon_find_dirs() {
     fi
 	if [ -d "$b$f" ]
     then
-        ( if [ "$b$f" = "$wdata_dir/" ]
-          then
-              if [ "$d" ]
-              then
-                  find "$b$f" "$d" -name "*$s" -type d -not path "$b$f" -not -path "$hidden_dir*"
-              else
-                  find "$b$f" -path "$hidden_dir" -prune -o -name "*$s" -type d -not -path "$b$f" -print
-              fi
-          else
-              find "$b$f" $d -name "*$s" -type d -not -path "$b$f"
-          fi ) | carbon_normalize_find "$b" "$s"
+        if [ "$b$f" = "$wdata_dir/" ]
+        then
+            if [ "$d" ]
+            then
+                find "$b$f" "$d" -name "*$s" -type d -not path "$b$f" -not -path "$hidden_dir*"
+            else
+                find "$b$f" -path "$hidden_dir" -prune -o -name "*$s" -type d -not -path "$b$f" -print
+            fi
+        else
+            find "$b$f" $d -name "*$s" -type d -not -path "$b$f"
+        fi | carbon_normalize_find "$b" "$s"
     fi
     if [ -z "$d" -a "$s" -a -d "$e" -a "$f" != "/" ]
     then
@@ -208,12 +209,18 @@ carbon_commit_from_path() {
     carbon_find_files "$r" "$hidden_dir" "$hidden_suffix" | \
         while read p
         do
-            carbon_if_precommit "$p" printf ".%s\0" "$p"
-        done | ( cd "$commit_target" && carbon_doit_xargs rm -v -f ) # -f since the file can be already removed.
+            if [ -e "$commit_target$p" ]
+            then
+                carbon_if_precommit "$p" printf ".%s\0" "$p"
+            fi
+        done | ( cd "$commit_target" && carbon_doit_xargs rm -v)
     carbon_find_dirs -depth "$r" "$hidden_dir" "$hidden_suffix" | \
         while read p
         do
-            carbon_if_precommit "$p" printf ".%s\0" "$p"
+            if [ -d "$commit_target$p" ]
+            then
+                carbon_if_precommit "$p" printf ".%s\0" "$p"
+            fi
         done | ( cd "$commit_target" && carbon_doit_xargs rmdir )
     carbon_find_dirs -- "$r" "$wdata_dir" | \
         while read p
@@ -269,7 +276,6 @@ carbon_list_from_path() {
     local p r n t
     t="$1"
     r=$( carbon_normalize $2 )
-    # TODO: Merge them to save current space.
     carbon_find_files "$r" "$hidden_dir" "$hidden_suffix" | \
         while read p
         do
@@ -461,11 +467,15 @@ EOF
         esac
     done
     shift `expr $OPTIND - 1`
-
-    while [ $# -ne 0 ]; do
-        carbon_commit_from_path "$1"
-        shift
-    done
+    if [ $# -eq 0 ]
+    then
+        carbon_commit_from_path .
+    else
+        while [ $# -ne 0 ]; do
+            carbon_commit_from_path "$1"
+            shift
+        done
+    fi
 }
 
 carbon_revert() {
@@ -492,10 +502,15 @@ EOF
     done
     shift `expr $OPTIND - 1`
 
-    while [ $# -ne 0 ]; do
-        carbon_revert_from_path "$1"
-        shift
-    done
+    if [ $# -eq 0 ]
+    then
+        carbon_revert_from_path .
+    else
+        while [ $# -ne 0 ]; do
+            carbon_revert_from_path "$1"
+            shift
+        done
+    fi
 }
 
 carbon_list() {
@@ -531,10 +546,15 @@ EOF
     done
     shift `expr $OPTIND - 1`
 
-    while [ $# -ne 0 ]; do
-        carbon_list_from_path "$p" "$1"
-        shift
-    done | sort -k2 -u | sort -k1,1 --stable
+    if [ $# -eq 0 ]
+    then
+        carbon_list_from_path .
+    else
+        while [ $# -ne 0 ]; do
+            carbon_list_from_path "$p" "$1"
+            shift
+        done 
+    fi | sort -k2 -u | sort -k1,1 --stable
 }
 
 case $command in
