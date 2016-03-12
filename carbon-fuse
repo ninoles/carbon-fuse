@@ -135,6 +135,7 @@ carbon_find_files() {
         fi | carbon_normalize_find "$b" "$s"
     fi
 }
+
 carbon_find_dirs() {
 	local f b s e d -
     d="$1"
@@ -311,6 +312,7 @@ Options:
 -d  Data directory.  Where the cache data will be saved. Default to $HOME/.carbon/name/data.
 EOF
 }
+
 carbon_init() {
      local a b c d r s t w
      r=0
@@ -416,16 +418,24 @@ EOF
 
     l="$log_dir/read.log"
     savelog "$l"
-    exec backfs $o $read_options "$read_dir" >>"$l" 2>&1 &
+    exec stdbuf -oL -- backfs $o $read_options "$read_dir" >>"$l" 2>&1 &
     if [ $f -eq 1 ]
     then
         echo $! > "$log_dir/read.pid"
     fi
-    sleep 1
+
+    echo Waiting for backfs to pull up...
+    fifo=/tmp/taillog.$$
+    mkfifo ${fifo} || exit 1
+    stdbuf -oL -- tail -f $log_dir/read.log > $fifo & 
+    tailpid=$!
+    grep -m 1 -e '^ready to go!$' ${fifo}
+    kill $tailpid
+    rm $fifo
 
     l="$log_dir/write.log"
     savelog "$l"
-    exec unionfs-fuse -f $write_options "$wdata_dir=RW:$read_dir" "$target" >>"$l" 2>&1 &
+    exec stdbuf -oL -- unionfs-fuse -f $write_options "$wdata_dir=RW:$read_dir" "$target" >>"$l" 2>&1 &
     if [ $f -eq 1 ]
     then
         echo $! > "$log_dir/write.pid"
