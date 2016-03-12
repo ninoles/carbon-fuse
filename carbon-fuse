@@ -70,7 +70,7 @@ carbon_read_config() {
         echo $USAGE exit 1;
     fi
     . $cfg
-    hidden_dir="$(readlink -m $wdata_dir/.unionfs)"
+    hidden_dir="$(readlink -m $wdata_dir/.unionfs-fuse)"
     hidden_suffix=_HIDDEN~
 }
 
@@ -357,7 +357,7 @@ rdata_dir="\$(readlink -f $d/read)"
 wdata_dir="\$(readlink -f $d/write)"
 log_dir=\$(readlink -f $b/logs)"
 read_options="-ocache=\$rdata_dir,backing_fs=\$src,cache_size=$r,rw"
-write_options="-ocow,max_files=$w,use_ino"
+write_options="-ocow,hide_meta_files,max_files=$w,use_ino"
 carbon_rsync_options="$carbon_rsync_options"
 
 # Parameters for the {pre,post}{mount,unmount} commands are name src target
@@ -421,6 +421,7 @@ EOF
     then
         echo $! > "$log_dir/read.pid"
     fi
+    sleep 1
 
     l="$log_dir/write.log"
     savelog "$l"
